@@ -1,5 +1,6 @@
 build:
-	go build ./cmd/puma-dev
+	GOOS=darwin GOARCH=arm64 go build -o puma-dev_darwin_arm64 ./cmd/puma-dev
+	GOOS=linux GOARCH=amd64 go build -o puma-dev_linux_amd64 ./cmd/puma-dev
 
 clean:
 	rm -f ./puma-dev
