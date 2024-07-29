@@ -260,11 +260,16 @@ if test -e .pumaenv && [ "$PUMADEV_SOURCE_PUMAENV" != "0" ]; then
 	source .pumaenv
 fi
 
-if test -e Gemfile && bundle exec puma -V &>/dev/null; then
-	exec bundle exec puma -C $CONFIG --tag puma-dev:%s -w $WORKERS -t 0:$THREADS -b unix:%s
+devbox_prefix=""
+if test -e devbox.json; then
+  devbox_prefix="devbox run --pure"
 fi
 
-exec puma -C $CONFIG --tag puma-dev:%s -w $WORKERS -t 0:$THREADS -b unix:%s'
+if test -e Gemfile && $devbox_prefix bundle exec puma -V &>/dev/null; then
+	exec $devbox_prefix bundle exec puma -C $CONFIG --tag puma-dev:%s -w $WORKERS -t 0:$THREADS -b unix:%s
+fi
+
+exec $devbox_prefix puma -C $CONFIG --tag puma-dev:%s -w $WORKERS -t 0:$THREADS -b unix:%s'
 `
 
 func (pool *AppPool) LaunchApp(name, dir string) (*App, error) {
