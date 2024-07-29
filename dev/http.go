@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -33,11 +34,13 @@ type HTTPServer struct {
 	tcpProxy      *httputil.ReverseProxy
 }
 
-const dialerTimeout = 5 * time.Second
-const keepAlive = 10 * time.Second
-const tlsHandshakeTimeout = 10 * time.Second
-const expectContinueTimeout = 1 * time.Second
-const proxyFlushInternal = 1 * time.Second
+const (
+	dialerTimeout         = 5 * time.Second
+	keepAlive             = 10 * time.Second
+	tlsHandshakeTimeout   = 10 * time.Second
+	expectContinueTimeout = 1 * time.Second
+	proxyFlushInternal    = 1 * time.Second
+)
 
 func (h *HTTPServer) Setup() {
 	h.unixTransport = &http.Transport{
@@ -142,6 +145,63 @@ func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	name := h.removeTLD(req.Host)
+
+	// Check for API requests.
+	apiPattern := regexp.MustCompile(`^api\.(pco|churchcenter)\.(test|codes)$`)
+	apiMatch := apiPattern.FindStringSubmatch(req.Host)
+	if apiMatch != nil {
+		// Both api.pco.test and api.churchcenter.test go to the API app by default,
+		// but we need to check the path to be sure.
+		v2Pattern := regexp.MustCompile(`^\/([\w-]+)\/v2`)
+		v2Match := v2Pattern.FindStringSubmatch(req.URL.Path)
+		if v2Match != nil && v2Match[1] != "global" {
+			// The path indicates a different app, e.g. /services/v2/
+			// ...so we'll proxy to that app instead.
+			name = fmt.Sprintf("%s.pco", v2Match[1])
+			// We have to change the host header to match the app to which we're sending the request.
+			req.Header.Set("Host", fmt.Sprintf("%s.pco.test", v2Match[1]))
+			req.Header.Set("X-PCO-API-Engine-Host", req.Host)
+		} else {
+			// This is a plain request to the API app.
+			name = "api.pco"
+		}
+	}
+
+	// Check for Church Center requests.
+	ccAppPattern := regexp.MustCompile(`^\/(giving|groups|people|publishing|registrations)`)
+	ccPattern := regexp.MustCompile(`^([\w-]+)\.churchcenter\.(test|codes)$`)
+	ccSubdomainMatch := ccPattern.FindStringSubmatch(req.Host)
+	if ccSubdomainMatch != nil && ccSubdomainMatch[1] != "api" {
+		ccPathMatch := ccAppPattern.FindStringSubmatch(req.URL.Path)
+		if ccPathMatch != nil {
+			// This is a request for a specific Church Center app.
+			name = fmt.Sprintf("%s.pco", ccPathMatch[1])
+			// We have to change the host header to match the app to which we're sending the request.
+			req.Header.Set("Host", fmt.Sprintf("%s.pco.test", ccPathMatch[1]))
+			// The path needs to be rewritten to include the subdomain and directory
+			// so the app knows from whence this request actually came.
+			req.URL.Path = ccAppPattern.ReplaceAllString(req.URL.Path, "/church_center")
+			// This matches `?foo=bar...` and captures the `foo=bar` part.
+			paramsPattern := regexp.MustCompile(`\?(.*)$|$`)
+			req.URL.Path = paramsPattern.ReplaceAllString(req.URL.Path,
+				fmt.Sprintf("?church_center_directory=%s&church_center_subdomain=%s&$1", ccPathMatch[1], ccSubdomainMatch[1]),
+			)
+		} else {
+			// This is a plain request to the Church Center app itself.
+			name = "churchcenter"
+		}
+	}
+
+	// Check to see if the path starts with ~api or ~ccapi.
+	squigglyPattern := regexp.MustCompile(`^\/~(api|ccapi)\/([\w-]+)`)
+	squigglyMatch := squigglyPattern.FindStringSubmatch(req.URL.Path)
+	if squigglyMatch != nil {
+		// Ahhh, this is a same-domain request in disguise! We need to proxy this
+		// to a different app than the hostname indicates.
+		name = fmt.Sprintf("%s.pco", squigglyMatch[2])
+		req.Header.Set("Host", fmt.Sprintf("%s.pco.test", squigglyMatch[2]))
+		req.Header.Set("X-PCO-API-Engine-Host", req.Host)
+	}
 
 	app, err := h.Pool.FindAppByDomainName(name)
 	if err != nil {
