@@ -146,13 +146,15 @@ func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	name := h.removeTLD(req.Host)
 
+	host := strings.Split(req.Host, ":")[0]
+
 	// Check for API requests.
 	apiPattern := regexp.MustCompile(`^api\.(pco|churchcenter)\.(test|codes)$`)
-	apiMatch := apiPattern.FindStringSubmatch(req.Host)
+	apiMatch := apiPattern.FindStringSubmatch(host)
 	if apiMatch != nil {
 		// Both api.pco.test and api.churchcenter.test go to the API app by default,
 		// but we need to check the path to be sure.
-		v2Pattern := regexp.MustCompile(`^\/([\w-]+)\/v2`)
+		v2Pattern := regexp.MustCompile(`^/([\w-]+)/v2`)
 		v2Match := v2Pattern.FindStringSubmatch(req.URL.Path)
 		if v2Match != nil && v2Match[1] != "global" {
 			// The path indicates a different app, e.g. /services/v2/
@@ -160,7 +162,7 @@ func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			name = fmt.Sprintf("%s.pco", v2Match[1])
 			// We have to change the host header to match the app to which we're sending the request.
 			req.Header.Set("Host", fmt.Sprintf("%s.pco.test", v2Match[1]))
-			req.Header.Set("X-PCO-API-Engine-Host", req.Host)
+			req.Header.Set("X-PCO-API-Engine-Host", host)
 		} else {
 			// This is a plain request to the API app.
 			name = "api.pco"
@@ -170,7 +172,7 @@ func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Check for Church Center requests.
 	ccAppPattern := regexp.MustCompile(`^\/(giving|groups|people|publishing|registrations)`)
 	ccPattern := regexp.MustCompile(`^([\w-]+)\.churchcenter\.(test|codes)$`)
-	ccSubdomainMatch := ccPattern.FindStringSubmatch(req.Host)
+	ccSubdomainMatch := ccPattern.FindStringSubmatch(host)
 	if ccSubdomainMatch != nil && ccSubdomainMatch[1] != "api" {
 		ccPathMatch := ccAppPattern.FindStringSubmatch(req.URL.Path)
 		if ccPathMatch != nil {
@@ -200,7 +202,7 @@ func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		// to a different app than the hostname indicates.
 		name = fmt.Sprintf("%s.pco", squigglyMatch[2])
 		req.Header.Set("Host", fmt.Sprintf("%s.pco.test", squigglyMatch[2]))
-		req.Header.Set("X-PCO-API-Engine-Host", req.Host)
+		req.Header.Set("X-PCO-API-Engine-Host", host)
 	}
 
 	app, err := h.Pool.FindAppByDomainName(name)
